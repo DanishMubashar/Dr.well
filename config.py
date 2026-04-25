@@ -9,7 +9,7 @@ APP_ICON = "🤖"
 APP_VERSION = "3.0.0"
 
 # Google API Key
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', 'AIzaSyD7qx_7VnCk3IxDqLAxiAZDz2H0E7jE9VY')
+# GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', )
 
 MEDICAL_SPECIALTIES = [
     "Cardiologist", "Dermatologist", "Neurologist", "Orthopedic Surgeon",
