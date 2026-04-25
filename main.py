@@ -2,17 +2,29 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from datetime import datetime
-import google.generativeai as genai
 import time
 import uuid
 import re
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
+import os
+
+# Load environment variables
+load_dotenv()
+
+# Configure LangChain with Google Gemini
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=GOOGLE_API_KEY,
+    temperature=0.5,
+    max_tokens=1024
+)
+
 from config import *
 from database import *
 from ui_components import *
-
-# Configure Gemini
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
 
 st.set_page_config(page_title="Dr. Well - AI Medical Assistant", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
 apply_custom_css()
@@ -43,7 +55,7 @@ def stream_response(response_text):
         time.sleep(0.03)
 
 def get_ai_medical_response(user_message, chat_history, session_id):
-    """Get response from Gemini AI with complete doctor database and treatment-first approach"""
+    """Get response from LangChain Google Gemini with doctor database access"""
     
     # Get complete doctors database
     doctors_text = get_all_doctors_text()
@@ -57,60 +69,56 @@ def get_ai_medical_response(user_message, chat_history, session_id):
     for msg in chat_history[-8:]:
         memory_text += f"{msg['role']}: {msg['content'][:150]}\n"
     
-    context = f"""
-    You are Dr. Well, a smart and caring AI medical assistant. You have COMPLETE access to all doctors in our database.
+    # Create system prompt
+    system_prompt = f"""You are Dr. Well, a smart and caring AI medical assistant. You have COMPLETE access to all doctors in our database.
 
-    🏥 COMPLETE DOCTORS DATABASE (You MUST use this to answer any doctor-related questions):
-    {doctors_text}
+🏥 COMPLETE DOCTORS DATABASE (You MUST use this to answer any doctor-related questions):
+{doctors_text}
+
+PATIENT INFO:
+- Current medications: {meds_text}
+
+CONVERSATION MEMORY:
+{memory_text}
+
+IMPORTANT RULES - FOLLOW STRICTLY:
+
+1. TREATMENT FIRST APPROACH:
+   - FIRST try to treat with medicine and home remedies
+   - Give specific medicine names, dosage, timing, and food restrictions
+   - ONLY refer to specialist if patient doesn't improve or symptoms are severe
+
+2. WHEN TO REFER TO DOCTOR:
+   - If patient says "no improvement", "still in pain", "medicine not working"
+   - If symptoms are severe (chest pain radiating to arm/jaw, difficulty breathing)
+   - If condition needs specialist care
+
+3. DOCTOR INFORMATION (Use exact database info):
+   - When patient asks about ANY doctor, give COMPLETE details from database
+   - Include: Full name, Specialty, Clinic, City, Fee, Phone, Available days/timings
+
+4. MEDICINE PRESCRIPTION:
+   - Give: name, dosage, frequency, timing (before/after food)
+   - Also give FOOD RESTRICTIONS (what to eat/avoid)
+   - Tell how many days to take
+
+5. RESPONSE STYLE:
+   - Keep response UNDER 60 words
+   - Be friendly and caring
+   - End with "Take care! - Dr. Well"
+
+Now respond to the patient's message:
+"""
     
-    PATIENT INFO:
-    - Current medications: {meds_text}
-    
-    CONVERSATION MEMORY:
-    {memory_text}
-    
-    PATIENT'S LATEST MESSAGE: {user_message}
-    
-    ⚠️ IMPORTANT RULES - FOLLOW STRICTLY:
-    
-    1. TREATMENT FIRST APPROACH:
-       - FIRST try to treat with medicine and home remedies
-       - Give specific medicine names, dosage, timing, and food restrictions
-       - ONLY refer to specialist if patient doesn't improve or symptoms are severe
-    
-    2. WHEN TO REFER TO DOCTOR:
-       - If patient says "no improvement", "still in pain", "medicine not working"
-       - If symptoms are severe (chest pain radiating to arm/jaw, difficulty breathing)
-       - If condition needs specialist care
-    
-    3. DOCTOR INFORMATION (Use exact database info):
-       - When patient asks about ANY doctor, give COMPLETE details from database:
-         * Full name
-         * Specialty 
-         * Clinic name and address
-         * City
-         * Consultation fee
-         * Phone number
-         * Available days and timings
-    
-    4. MEDICINE PRESCRIPTION:
-       - Give: name, dosage, frequency, timing (before/after food)
-       - Also give FOOD RESTRICTIONS (what to eat/avoid)
-       - Tell how many days to take
-       - Tell when to come back if no improvement
-    
-    5. RESPONSE STYLE:
-       - Keep response UNDER 60 words
-       - Be friendly and caring
-       - Ask follow-up questions if needed
-       - End with "Take care! - Dr. Well"
-    
-    Now respond as Dr. Well:
-    """
+    # Create messages for LangChain
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message)
+    ]
     
     try:
-        response = model.generate_content(context)
-        reply = response.text.strip()
+        response = llm.invoke(messages)
+        reply = response.content.strip()
         
         words = reply.split()
         if len(words) > 60:
@@ -126,7 +134,6 @@ def get_fallback_response(user_message):
     
     # Check for doctor questions
     if "doctor" in msg_lower or "dr" in msg_lower:
-        # Extract doctor name
         import re
         doctor_match = re.search(r'(?:Dr\.?\s*)([A-Za-z]+(?:\s+[A-Za-z]+)?)', user_message, re.IGNORECASE)
         if doctor_match:
@@ -143,19 +150,17 @@ def get_fallback_response(user_message):
 Take care! - Dr. Well"""
     
     # Check for appointment questions
-    if "appointment" in msg_lower or "kab" in msg_lower or "mile" in msg_lower:
-        return "Please call the clinic directly to check appointment availability and book your visit. Their phone number is mentioned in the doctor's details above. Take care! - Dr. Well"
+    if "appointment" in msg_lower or "kab" in msg_lower:
+        return "Please call the clinic directly to check appointment availability. Their phone number is in the doctor's details above. Take care! - Dr. Well"
     
     # Chest pain emergency
     if "chest" in msg_lower and "pain" in msg_lower:
-        return "⚠️ Chest pain needs attention! First, take rest. If pain is sharp or spreading to arm/jaw, please see a Cardiologist immediately. Dr. Sarah Smith (Heart Care Clinic, NY) or Dr. Ahmed Khan (City Heart Institute, Chicago) can help. Call them for emergency appointment. Take care! - Dr. Well"
+        return "⚠️ Chest pain needs attention! If pain is sharp or spreading to arm/jaw, please see a Cardiologist immediately. Dr. Sarah Smith or Dr. Ahmed Khan can help. Take care! - Dr. Well"
     
-    # General response
     return "Please tell me more about your symptoms so I can help you better. Take care! - Dr. Well"
 
 def extract_medication_from_response(response_text, user_message):
     """Extract medication info from AI response and auto-add to database"""
-    # Common medicine patterns
     med_patterns = [
         r'(\w+(?:\s+\w+)?)\s+(\d+\s*(?:mg|ml|g|tablet|capsule))',
         r'take\s+(\w+(?:\s+\w+)?)\s+(\d+\s*(?:mg|ml|g))',
@@ -169,7 +174,6 @@ def extract_medication_from_response(response_text, user_message):
             med_name = match.group(1)
             med_dosage = match.group(2) if len(match.groups()) > 1 else "As prescribed"
             
-            # Don't add if already exists
             existing_meds = get_medications(st.session_state.user_id)
             if not any(m['name'].lower() == med_name.lower() for m in existing_meds):
                 save_medication(
@@ -304,7 +308,6 @@ def consultations():
             
             # Handle doctor questions
             if "doctor" in prompt.lower() or "dr" in prompt.lower():
-                # Try to find doctor name in question
                 import re
                 doctor_match = re.search(r'(?:Dr\.?\s*)([A-Za-z]+(?:\s+[A-Za-z]+)?)', prompt, re.IGNORECASE)
                 if doctor_match:
