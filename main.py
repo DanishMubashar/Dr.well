@@ -2,30 +2,17 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from datetime import datetime
+import google.generativeai as genai
 import time
 import uuid
 import re
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain.schema import HumanMessage, SystemMessage, AIMessage
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-import os
-
-# Load environment variables
-load_dotenv()
-
-# Configure LangChain with Google Gemini
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=GOOGLE_API_KEY,
-    temperature=0.5,
-    max_tokens=1024
-)
-
 from config import *
 from database import *
 from ui_components import *
+
+# Configure Gemini
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 st.set_page_config(page_title="Dr. Well - AI Medical Assistant", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
 apply_custom_css()
@@ -56,7 +43,7 @@ def stream_response(response_text):
         time.sleep(0.03)
 
 def get_ai_medical_response(user_message, chat_history, session_id):
-    """Get response from LangChain Google Gemini with doctor database access"""
+    """Get response from Gemini AI with complete doctor database and treatment-first approach"""
     
     # Get complete doctors database
     doctors_text = get_all_doctors_text()
@@ -70,56 +57,60 @@ def get_ai_medical_response(user_message, chat_history, session_id):
     for msg in chat_history[-8:]:
         memory_text += f"{msg['role']}: {msg['content'][:150]}\n"
     
-    # Create system prompt
-    system_prompt = f"""You are Dr. Well, a smart and caring AI medical assistant. You have COMPLETE access to all doctors in our database.
+    context = f"""
+    You are Dr. Well, a smart and caring AI medical assistant. You have COMPLETE access to all doctors in our database.
 
-🏥 COMPLETE DOCTORS DATABASE (You MUST use this to answer any doctor-related questions):
-{doctors_text}
-
-PATIENT INFO:
-- Current medications: {meds_text}
-
-CONVERSATION MEMORY:
-{memory_text}
-
-IMPORTANT RULES - FOLLOW STRICTLY:
-
-1. TREATMENT FIRST APPROACH:
-   - FIRST try to treat with medicine and home remedies
-   - Give specific medicine names, dosage, timing, and food restrictions
-   - ONLY refer to specialist if patient doesn't improve or symptoms are severe
-
-2. WHEN TO REFER TO DOCTOR:
-   - If patient says "no improvement", "still in pain", "medicine not working"
-   - If symptoms are severe (chest pain radiating to arm/jaw, difficulty breathing)
-   - If condition needs specialist care
-
-3. DOCTOR INFORMATION (Use exact database info):
-   - When patient asks about ANY doctor, give COMPLETE details from database
-   - Include: Full name, Specialty, Clinic, City, Fee, Phone, Available days/timings
-
-4. MEDICINE PRESCRIPTION:
-   - Give: name, dosage, frequency, timing (before/after food)
-   - Also give FOOD RESTRICTIONS (what to eat/avoid)
-   - Tell how many days to take
-
-5. RESPONSE STYLE:
-   - Keep response UNDER 60 words
-   - Be friendly and caring
-   - End with "Take care! - Dr. Well"
-
-Now respond to the patient's message:
-"""
+    🏥 COMPLETE DOCTORS DATABASE (You MUST use this to answer any doctor-related questions):
+    {doctors_text}
     
-    # Create messages for LangChain
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_message)
-    ]
+    PATIENT INFO:
+    - Current medications: {meds_text}
+    
+    CONVERSATION MEMORY:
+    {memory_text}
+    
+    PATIENT'S LATEST MESSAGE: {user_message}
+    
+    ⚠️ IMPORTANT RULES - FOLLOW STRICTLY:
+    
+    1. TREATMENT FIRST APPROACH:
+       - FIRST try to treat with medicine and home remedies
+       - Give specific medicine names, dosage, timing, and food restrictions
+       - ONLY refer to specialist if patient doesn't improve or symptoms are severe
+    
+    2. WHEN TO REFER TO DOCTOR:
+       - If patient says "no improvement", "still in pain", "medicine not working"
+       - If symptoms are severe (chest pain radiating to arm/jaw, difficulty breathing)
+       - If condition needs specialist care
+    
+    3. DOCTOR INFORMATION (Use exact database info):
+       - When patient asks about ANY doctor, give COMPLETE details from database:
+         * Full name
+         * Specialty 
+         * Clinic name and address
+         * City
+         * Consultation fee
+         * Phone number
+         * Available days and timings
+    
+    4. MEDICINE PRESCRIPTION:
+       - Give: name, dosage, frequency, timing (before/after food)
+       - Also give FOOD RESTRICTIONS (what to eat/avoid)
+       - Tell how many days to take
+       - Tell when to come back if no improvement
+    
+    5. RESPONSE STYLE:
+       - Keep response UNDER 60 words
+       - Be friendly and caring
+       - Ask follow-up questions if needed
+       - End with "Take care! - Dr. Well"
+    
+    Now respond as Dr. Well:
+    """
     
     try:
-        response = llm.invoke(messages)
-        reply = response.content.strip()
+        response = model.generate_content(context)
+        reply = response.text.strip()
         
         words = reply.split()
         if len(words) > 60:
@@ -135,6 +126,7 @@ def get_fallback_response(user_message):
     
     # Check for doctor questions
     if "doctor" in msg_lower or "dr" in msg_lower:
+        # Extract doctor name
         import re
         doctor_match = re.search(r'(?:Dr\.?\s*)([A-Za-z]+(?:\s+[A-Za-z]+)?)', user_message, re.IGNORECASE)
         if doctor_match:
@@ -151,17 +143,19 @@ def get_fallback_response(user_message):
 Take care! - Dr. Well"""
     
     # Check for appointment questions
-    if "appointment" in msg_lower or "kab" in msg_lower:
-        return "Please call the clinic directly to check appointment availability. Their phone number is in the doctor's details above. Take care! - Dr. Well"
+    if "appointment" in msg_lower or "kab" in msg_lower or "mile" in msg_lower:
+        return "Please call the clinic directly to check appointment availability and book your visit. Their phone number is mentioned in the doctor's details above. Take care! - Dr. Well"
     
     # Chest pain emergency
     if "chest" in msg_lower and "pain" in msg_lower:
-        return "⚠️ Chest pain needs attention! If pain is sharp or spreading to arm/jaw, please see a Cardiologist immediately. Dr. Sarah Smith or Dr. Ahmed Khan can help. Take care! - Dr. Well"
+        return "⚠️ Chest pain needs attention! First, take rest. If pain is sharp or spreading to arm/jaw, please see a Cardiologist immediately. Dr. Sarah Smith (Heart Care Clinic, NY) or Dr. Ahmed Khan (City Heart Institute, Chicago) can help. Call them for emergency appointment. Take care! - Dr. Well"
     
+    # General response
     return "Please tell me more about your symptoms so I can help you better. Take care! - Dr. Well"
 
 def extract_medication_from_response(response_text, user_message):
     """Extract medication info from AI response and auto-add to database"""
+    # Common medicine patterns
     med_patterns = [
         r'(\w+(?:\s+\w+)?)\s+(\d+\s*(?:mg|ml|g|tablet|capsule))',
         r'take\s+(\w+(?:\s+\w+)?)\s+(\d+\s*(?:mg|ml|g))',
@@ -175,6 +169,7 @@ def extract_medication_from_response(response_text, user_message):
             med_name = match.group(1)
             med_dosage = match.group(2) if len(match.groups()) > 1 else "As prescribed"
             
+            # Don't add if already exists
             existing_meds = get_medications(st.session_state.user_id)
             if not any(m['name'].lower() == med_name.lower() for m in existing_meds):
                 save_medication(
@@ -187,16 +182,59 @@ def extract_medication_from_response(response_text, user_message):
 # ========== PAGE FUNCTIONS ==========
 def dashboard():
     user = get_user_by_id(st.session_state.user_id)
-    st.markdown(f'<div class="main-header"><h1>🤖 Welcome, {user.get("full_name", "User")}!</h1><p>Your AI Medical Assistant</p></div>', unsafe_allow_html=True)
+    show_hero_banner(user.get('full_name', 'User'))
+    show_dashboard_stats()
     
-    col1, col2, col3 = st.columns(3)
+    st.markdown("### 🚀 Quick Actions")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown('<div class="card"><h3>💊 My Medications</h3>', unsafe_allow_html=True)
+        if st.button("🩺 **Consultations**\nChat with AI Doctor", use_container_width=True):
+            st.session_state.page = "Consultations"
+            st.rerun()
+    
+    with col2:
+        if st.button("🍎 **Nutrition**\nGet diet advice", use_container_width=True):
+            st.session_state.page = "Nutrition"
+            st.rerun()
+    
+    with col3:
+        if st.button("💊 **Medications**\nView prescriptions", use_container_width=True):
+            st.session_state.page = "Medications"
+            st.rerun()
+    
+    with col4:
+        if st.button("📅 **Appointments**\nSchedule visits", use_container_width=True):
+            st.session_state.page = "Appointments"
+            st.rerun()
+    
+    col5, col6, col7 = st.columns(3)
+    
+    with col5:
+        if st.button("👨‍⚕️ **Find Doctors**\nBrowse specialists", use_container_width=True):
+            st.session_state.page = "Find Doctors"
+            st.rerun()
+    
+    with col6:
+        if st.button("👤 **My Profile**\nUpdate information", use_container_width=True):
+            st.session_state.page = "Profile"
+            st.rerun()
+    
+    with col7:
+        if st.button("🚨 **Emergency**\nGet immediate help", use_container_width=True):
+            st.error("🚨 **EMERGENCY!** Please call emergency services (911/1122) immediately!")
+            st.info("📞 **Emergency Numbers:**\n- Ambulance: 911/1122\n- Poison Control: 1-800-222-1222")
+    
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown('<div class="card"><h3>💊 Recent Medications</h3>', unsafe_allow_html=True)
         meds = get_medications(st.session_state.user_id)
         if meds:
-            for m in meds[:3]:
-                st.write(f"• {m['name']} - {m['dosage']}")
+            for m in meds[:5]:
+                st.write(f"• **{m['name']}** - {m['dosage']}")
         else:
             st.info("No active medications")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -204,42 +242,31 @@ def dashboard():
     with col2:
         st.markdown('<div class="card"><h3>📅 Upcoming Appointments</h3>', unsafe_allow_html=True)
         apts = get_appointments(st.session_state.user_id)
-        if apts:
-            for a in apts[:3]:
-                st.write(f"• Dr. {a['doctor_name']} - {a['date']}")
+        upcoming = [a for a in apts if a['status'] != 'Completed'][:5]
+        if upcoming:
+            for a in upcoming:
+                st.write(f"• **Dr. {a['doctor_name']}** - {a['date']}")
         else:
             st.info("No upcoming appointments")
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown('<div class="card"><h3>👨‍⚕️ Doctors Available</h3>', unsafe_allow_html=True)
-        doctors = get_all_doctors()
-        st.metric("Total Doctors", len(doctors))
-        st.markdown('</div>', unsafe_allow_html=True)
 
 def consultations():
-    st.markdown('<div class="main-header"><h1>🤖 AI Medical Consultation</h1><p>Dr. Well will FIRST try to treat you, then refer to specialist if needed</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"><h1>🩺 AI Medical Consultation</h1><p>Dr. Well will FIRST try to treat you, then refer to specialist if needed</p></div>', unsafe_allow_html=True)
     
-    st.info("""
-    💡 **How Dr. Well works:**
-    1. 🩺 **Listens to your symptoms**
-    2. 💊 **Prescribes medicine with food tips** 
-    3. ✅ **If medicine works** - Continue treatment
-    4. 🏥 **If no improvement** - Refers to specialist doctor
-    5. 📋 **Answers any doctor questions** - Complete details from database
-    """)
+    show_chat_welcome()
     
-    # Initialize session
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
+    
     if 'chat_session_id' not in st.session_state:
         st.session_state.chat_session_id = create_chat_session(st.session_state.user_id)
         st.session_state.chat_messages = []
     
-    # Load chat history
     if 'chat_messages' not in st.session_state or len(st.session_state.chat_messages) == 0:
         saved_messages = get_chat_history(st.session_state.user_id, st.session_state.chat_session_id)
         st.session_state.chat_messages = [{"role": msg['role'], "content": msg['content']} for msg in saved_messages]
     
-    # Sidebar for chat sessions
     with st.sidebar:
         st.markdown("### 💬 Chat History")
         sessions = get_all_sessions(st.session_state.user_id)
@@ -255,12 +282,10 @@ def consultations():
             st.session_state.chat_messages = []
             st.rerun()
     
-    # Display chat messages
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     
-    # Chat input with streaming
     if prompt := st.chat_input("Describe your symptoms..."):
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         save_chat_message(st.session_state.user_id, st.session_state.chat_session_id, "user", prompt)
@@ -271,7 +296,6 @@ def consultations():
             with st.spinner("🩺 Dr. Well is analyzing..."):
                 response = get_ai_medical_response(prompt, st.session_state.chat_messages, st.session_state.chat_session_id)
                 
-                # Stream response
                 message_placeholder = st.empty()
                 full_response = ""
                 for chunk in stream_response(response):
@@ -279,16 +303,13 @@ def consultations():
                     message_placeholder.markdown(full_response + "▌")
                 message_placeholder.markdown(full_response)
             
-            # Save to database
             st.session_state.chat_messages.append({"role": "assistant", "content": full_response})
             save_chat_message(st.session_state.user_id, st.session_state.chat_session_id, "assistant", full_response)
             
-            # Auto-add medication if detected
             med_added = extract_medication_from_response(full_response, prompt)
             if med_added:
-                st.success(f"💊 {med_added} added to your medications list with food advice!")
+                st.success(f"💊 {med_added} added to your medications list!")
             
-            # Check for doctor recommendation
             if "cardiologist" in full_response.lower() or "heart" in prompt.lower():
                 doctors = get_doctor_by_specialty('Cardiologist')
                 if doctors:
@@ -299,7 +320,6 @@ def consultations():
                         📍 {doc['clinic_name']}, {doc['city']}
                         💰 Fee: ${doc['consultation_fee']}
                         📞 Phone: {doc['phone']}
-                        🕒 Available: {doc['available_days']} {doc['available_time_start']}-{doc['available_time_end']}
                         """)
                         if st.button(f"📅 Book with Dr. {doc['full_name']}", key=f"ref_doc_{doc['id']}"):
                             st.session_state.selected_doctor = doc
@@ -307,9 +327,7 @@ def consultations():
                             st.rerun()
                         st.markdown("---")
             
-            # Handle doctor questions
             if "doctor" in prompt.lower() or "dr" in prompt.lower():
-                import re
                 doctor_match = re.search(r'(?:Dr\.?\s*)([A-Za-z]+(?:\s+[A-Za-z]+)?)', prompt, re.IGNORECASE)
                 if doctor_match:
                     doctor_name = doctor_match.group(1)
@@ -320,29 +338,18 @@ def consultations():
                         **Name:** Dr. {doctor['full_name']}
                         **Specialty:** {doctor['specialty']}
                         **Clinic:** {doctor['clinic_name']}
-                        **Address:** {doctor['clinic_address']}, {doctor['city']}, {doctor['state']}
+                        **Address:** {doctor['clinic_address']}, {doctor['city']}
                         **Phone:** {doctor['phone']}
-                        **Email:** {doctor['email']}
                         **Fee:** ${doctor['consultation_fee']}
-                        **Available Days:** {doctor['available_days']}
-                        **Available Time:** {doctor['available_time_start']} - {doctor['available_time_end']}
-                        **Experience:** {doctor['experience_years']} years
-                        **Qualification:** {doctor['qualification']}
-                        **Rating:** ⭐ {doctor['rating']} ({doctor['total_reviews']} reviews)
+                        **Available:** {doctor['available_days']} {doctor['available_time_start']}-{doctor['available_time_end']}
                         """)
-                        if st.button(f"📅 Book Appointment with Dr. {doctor['full_name']}", key=f"doc_detail_{doctor['id']}"):
+                        if st.button(f"📅 Book with Dr. {doctor['full_name']}", key=f"doc_detail_{doctor['id']}"):
                             st.session_state.selected_doctor = doctor
                             st.session_state.show_booking = True
                             st.rerun()
-            
-            # Check for emergency
-            emergency_keywords = ["chest", "heart", "difficulty breathing", "unbearable", "severe pain", "no improvement", "still in pain"]
-            if any(kw in prompt.lower() for kw in emergency_keywords) and "no improvement" in full_response.lower():
-                st.error("🚨 **Dr. Well recommends seeing a specialist immediately!** Please book an appointment with the recommended doctor above.")
         
         st.rerun()
     
-    # Booking modal
     if st.session_state.get('show_booking') and st.session_state.get('selected_doctor'):
         show_booking_modal()
 
@@ -380,6 +387,11 @@ def show_booking_modal():
 
 def nutrition():
     st.markdown('<div class="main-header"><h1>🍎 Smart Nutrition</h1><p>Get food advice based on your condition</p></div>', unsafe_allow_html=True)
+    
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
+    
     st.markdown('<div class="card">', unsafe_allow_html=True)
     
     from config import FOOD_RESTRICTIONS
@@ -391,6 +403,10 @@ def nutrition():
 
 def medications_page():
     st.markdown('<div class="main-header"><h1>💊 My Medications</h1><p>Auto-added from Dr. Well consultations</p></div>', unsafe_allow_html=True)
+    
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
     
     meds = get_medications(st.session_state.user_id)
     if meds:
@@ -412,6 +428,10 @@ def medications_page():
 def appointments_page():
     st.markdown('<div class="main-header"><h1>📅 My Appointments</h1><p>View your scheduled appointments</p></div>', unsafe_allow_html=True)
     
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
+    
     apts = get_appointments(st.session_state.user_id)
     if apts:
         for a in apts:
@@ -429,6 +449,10 @@ def appointments_page():
 
 def doctors_list_page():
     st.markdown('<div class="main-header"><h1>👨‍⚕️ Find a Doctor</h1><p>Browse our network of verified specialists</p></div>', unsafe_allow_html=True)
+    
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -466,6 +490,11 @@ def doctors_list_page():
 def profile_page():
     user = get_user_by_id(st.session_state.user_id)
     st.markdown('<div class="main-header"><h1>👤 My Profile</h1><p>Update your information</p></div>', unsafe_allow_html=True)
+    
+    if st.button("← Back to Dashboard", use_container_width=False):
+        st.session_state.page = "Dashboard"
+        st.rerun()
+    
     st.markdown('<div class="card">', unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
@@ -493,6 +522,8 @@ def main():
         st.session_state.show_booking = False
     if 'selected_doctor' not in st.session_state:
         st.session_state.selected_doctor = None
+    if 'page' not in st.session_state:
+        st.session_state.page = "Dashboard"
     
     if not st.session_state.logged_in:
         if st.session_state.show_about:
@@ -557,52 +588,24 @@ def main():
                 st.rerun()
         return
     
+    # ========== SIDEBAR - YAHAN PE render_sidebar() LIKHNA HAI ==========
     with st.sidebar:
-        user = get_user_by_id(st.session_state.user_id)
-        st.markdown(f"""
-        <div style="text-align: center; padding: 20px;">
-            <div style="font-size: 50px;">{'👨‍⚕️' if st.session_state.user_type == 'doctor' else '👤'}</div>
-            <h3 style="color: white;">{user.get('full_name', 'User')}</h3>
-            <p style="color: #90c9d9;">{st.session_state.user_type.title()}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        menu_options = ["Dashboard", "Consultations", "Nutrition", "Medications", "Appointments", "Find Doctors", "Profile"]
-        
-        selected = option_menu(
-            None, menu_options,
-            icons=["speedometer2", "chat-dots", "apple", "capsule", "calendar-check", "search", "person"],
-            menu_icon="hospital", default_index=0,
-            styles={
-                "container": {"padding": "0!important"},
-                "icon": {"color": "#90c9d9", "font-size": "20px"},
-                "nav-link": {"color": "white", "font-size": "14px", "padding": "10px 15px", "--hover-color": "rgba(255,255,255,0.1)"},
-                "nav-link-selected": {"background": "#2c7a8a", "color": "white", "font-weight": "600"}
-            }
-        )
-        
-        st.markdown("---")
-        db_status = check_database()
-        st.caption(f"📊 {db_status['users']} users | {db_status['doctors']} doctors")
-        
-        if st.button("🚪 Logout", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+        render_sidebar()  # <-- YAHAN PE YE LINE LIKHNI HAI
     
-    if selected == "Dashboard":
+    # Page navigation based on session state
+    if st.session_state.page == "Dashboard":
         dashboard()
-    elif selected == "Consultations":
+    elif st.session_state.page == "Consultations":
         consultations()
-    elif selected == "Nutrition":
+    elif st.session_state.page == "Nutrition":
         nutrition()
-    elif selected == "Medications":
+    elif st.session_state.page == "Medications":
         medications_page()
-    elif selected == "Appointments":
+    elif st.session_state.page == "Appointments":
         appointments_page()
-    elif selected == "Find Doctors":
+    elif st.session_state.page == "Find Doctors":
         doctors_list_page()
-    elif selected == "Profile":
+    elif st.session_state.page == "Profile":
         profile_page()
 
 if __name__ == "__main__":
