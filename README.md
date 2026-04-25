@@ -4,7 +4,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B.svg)](https://streamlit.io)
 [![Gemini](https://img.shields.io/badge/Gemini-AI-purple.svg)](https://deepmind.google/technologies/gemini/)
+## 🌐 Live Demo
 
+**👉 [Click Here to Try Dr. Well](https://drwell-fyp-21.streamlit.app/) 👈**
 ## 📌 What is Dr. Well?
 
 Dr. Well is an **AI-powered Medical Assistant** that provides instant healthcare guidance, symptom analysis, medication recommendations, and doctor referrals.
